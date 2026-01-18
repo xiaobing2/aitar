@@ -7,7 +7,9 @@
  * 2. 运行: node test-local.js
  */
 
-import { handler } from './webhook.js'
+import webhookModule from './webhook.js'
+// ESA边缘函数格式：默认导出包含fetch函数的对象
+const handler = webhookModule.fetch
 import dotenv from 'dotenv'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'

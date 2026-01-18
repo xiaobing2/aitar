@@ -15,20 +15,39 @@ const corsHeaders = {
 }
 
 /**
- * 处理QQ Webhook回调
+ * 处理请求的主函数
  */
-export async function handler(request) {
-  const { method, url, body, headers } = request
+async function handleRequest(request) {
+  // 获取请求方法和URL
+  const method = request.method
+  const url = new URL(request.url)
+  const path = url.pathname
   
   // 处理OPTIONS预检请求
   if (method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
   
-  const urlObj = new URL(url)
-  const path = urlObj.pathname
+  // 读取请求体（如果需要）
+  let body = null
+  let headers = {}
   
   try {
+    // 获取请求头
+    request.headers.forEach((value, key) => {
+      headers[key] = value
+    })
+    
+    // 读取请求体（仅POST/PUT请求）
+    if (method === 'POST' || method === 'PUT') {
+      try {
+        body = await request.text()
+      } catch (e) {
+        // 如果请求体为空或读取失败，body保持为null
+        body = null
+      }
+    }
+    
     // QQ Webhook接收
     if (method === 'POST' && path === '/api/webhook/qq/group') {
       return await handleQQWebhook(body, headers)
@@ -36,7 +55,7 @@ export async function handler(request) {
     
     // 获取新消息（供前端轮询）
     if (method === 'GET' && path === '/api/edge/messages') {
-      const since = urlObj.searchParams.get('since')
+      const since = url.searchParams.get('since')
       return await getNewMessages(since)
     }
     
@@ -61,6 +80,16 @@ export async function handler(request) {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
+  }
+}
+
+/**
+ * ESA边缘函数导出格式
+ * 必须默认导出一个包含fetch函数的对象
+ */
+export default {
+  async fetch(request) {
+    return await handleRequest(request)
   }
 }
 

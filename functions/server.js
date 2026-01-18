@@ -8,7 +8,9 @@
  * 3. 访问: http://localhost:3000
  */
 
-import { handler } from './webhook.js'
+import webhookModule from './webhook.js'
+// ESA边缘函数格式：默认导出包含fetch函数的对象
+const handler = webhookModule.fetch
 import http from 'http'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
