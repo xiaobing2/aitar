@@ -1,0 +1,430 @@
+/**
+ * QQ Webhook处理器
+ * 接收QQ官方API的Webhook回调
+ */
+
+// 消息存储（实际应使用边缘KV）
+const messageStore = new Map()
+const processedMessages = new Set()
+
+// CORS响应头
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Signature-Ed25519, X-Signature-Timestamp'
+}
+
+/**
+ * 处理QQ Webhook回调
+ */
+export async function handler(request) {
+  const { method, url, body, headers } = request
+  
+  // 处理OPTIONS预检请求
+  if (method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders })
+  }
+  
+  const urlObj = new URL(url)
+  const path = urlObj.pathname
+  
+  try {
+    // QQ Webhook接收
+    if (method === 'POST' && path === '/api/webhook/qq/group') {
+      return await handleQQWebhook(body, headers)
+    }
+    
+    // 获取新消息（供前端轮询）
+    if (method === 'GET' && path === '/api/edge/messages') {
+      const since = urlObj.searchParams.get('since')
+      return await getNewMessages(since)
+    }
+    
+    // 标记消息已处理
+    if (method === 'POST' && path.startsWith('/api/edge/messages/') && path.endsWith('/processed')) {
+      const messageId = path.split('/')[4]
+      return await markMessageProcessed(messageId)
+    }
+    
+    // 阿里云API代理（解决CORS问题）
+    if (method === 'POST' && path === '/api/edge/ali-api') {
+      return await proxyAliAPI(body, headers)
+    }
+    
+    return new Response(JSON.stringify({ error: 'Not Found' }), {
+      status: 404,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('Webhook handler error:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 处理QQ Webhook回调
+ */
+async function handleQQWebhook(body, headers) {
+  try {
+    const data = typeof body === 'string' ? JSON.parse(body) : body
+    
+    // 检查是否是回调地址验证（op=13）
+    if (data.op === 13) {
+      return await handleValidation(data)
+    }
+    
+    // 处理事件推送（op=0）
+    if (data.op === 0) {
+      return await handleEvent(data)
+    }
+    
+    return new Response(JSON.stringify({ code: 0, message: 'received' }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('QQ Webhook处理错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 处理回调地址验证（op=13）
+ * 使用Ed25519签名算法
+ */
+async function handleValidation(data) {
+  try {
+    const validationData = data.d || {}
+    const plainToken = validationData.plain_token || ''
+    const eventTs = validationData.event_ts || ''
+    
+    if (!plainToken || !eventTs) {
+      return new Response(JSON.stringify({ error: 'Missing validation fields' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+    
+    // 获取QQ_SECRET（从环境变量或配置）
+    const qqSecret = process.env.QQ_SECRET || ''
+    if (!qqSecret) {
+      console.warn('⚠️ QQ_SECRET未配置，验证可能失败')
+    }
+    
+    // 生成Ed25519签名
+    const signature = await generateEd25519Signature(qqSecret, eventTs, plainToken)
+    
+    return new Response(JSON.stringify({
+      plain_token: plainToken,
+      signature: signature
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('验证处理错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 生成Ed25519签名
+ * 注意：边缘函数环境可能不支持crypto，需要使用Web Crypto API
+ */
+async function generateEd25519Signature(secret, eventTs, plainToken) {
+  try {
+    // 生成seed：重复secret直到达到32字节
+    let seed = secret
+    while (seed.length < 32) {
+      seed = seed + seed
+    }
+    seed = seed.substring(0, 32)
+    
+    // 使用Web Crypto API生成Ed25519密钥对
+    const seedBuffer = new TextEncoder().encode(seed)
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'Ed25519',
+        namedCurve: 'Ed25519'
+      },
+      true,
+      ['sign']
+    )
+    
+    // 构建消息：eventTs + plainToken
+    const message = new TextEncoder().encode(eventTs + plainToken)
+    
+    // 签名
+    const signatureBuffer = await crypto.subtle.sign(
+      {
+        name: 'Ed25519'
+      },
+      keyPair.privateKey,
+      message
+    )
+    
+    // 转换为hex字符串
+    const signatureArray = Array.from(new Uint8Array(signatureBuffer))
+    const signatureHex = signatureArray.map(b => b.toString(16).padStart(2, '0')).join('')
+    
+    return signatureHex
+  } catch (error) {
+    // 如果Web Crypto API不支持Ed25519，使用fallback方案
+    console.warn('Ed25519签名失败，使用fallback:', error)
+    return generateFallbackSignature(secret, eventTs, plainToken)
+  }
+}
+
+/**
+ * Fallback签名方案（HMAC-SHA256）
+ * 注意：这不是官方要求的Ed25519，仅作为临时方案
+ */
+function generateFallbackSignature(secret, eventTs, plainToken) {
+  // 这里应该使用HMAC-SHA256，但边缘函数环境可能不支持
+  // 实际部署时需要确保使用正确的Ed25519实现
+  console.warn('⚠️ 使用fallback签名方案，可能无法通过QQ验证')
+  return 'fallback_signature_' + eventTs + plainToken
+}
+
+/**
+ * 处理事件推送（op=0）
+ */
+async function handleEvent(data) {
+  try {
+    const eventType = data.t || ''
+    const eventData = data.d || {}
+    
+    console.log(`📬 收到事件: ${eventType}`)
+    
+    // 处理群@机器人消息
+    if (eventType === 'GROUP_AT_MESSAGE_CREATE') {
+      return await handleGroupAtMessage(eventData)
+    }
+    
+    // 处理单聊消息
+    if (eventType === 'C2C_MESSAGE_CREATE') {
+      return await handleC2CMessage(eventData)
+    }
+    
+    // 其他事件类型
+    console.log(`ℹ️ 未处理的事件类型: ${eventType}`)
+    return new Response(JSON.stringify({ code: 0, message: `事件 ${eventType} 已接收` }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('事件处理错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 处理群@机器人消息
+ */
+async function handleGroupAtMessage(eventData) {
+  try {
+    const groupOpenid = eventData.group_openid || ''
+    const author = eventData.author || {}
+    const memberOpenid = author.member_openid || ''
+    const memberNickname = author.member_nickname || '未知用户'
+    const content = eventData.content || ''
+    const timestamp = eventData.timestamp || Date.now()
+    
+    console.log(`📨 收到群消息: [${groupOpenid}] ${memberNickname}: ${content}`)
+    
+    // 存储消息供前端轮询
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const message = {
+      id: messageId,
+      type: 'GROUP_AT_MESSAGE_CREATE',
+      groupOpenid: groupOpenid,
+      memberOpenid: memberOpenid,
+      memberNickname: memberNickname,
+      content: content,
+      timestamp: timestamp,
+      createdAt: new Date().toISOString(),
+      processed: false
+    }
+    
+    messageStore.set(messageId, message)
+    
+    return new Response(JSON.stringify({ code: 0, message: 'received', data: message }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('群消息处理错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 处理单聊消息
+ */
+async function handleC2CMessage(eventData) {
+  try {
+    const author = eventData.author || {}
+    const userOpenid = author.user_openid || ''
+    const userNickname = author.user_nickname || '未知用户'
+    const content = eventData.content || ''
+    const timestamp = eventData.timestamp || Date.now()
+    
+    console.log(`💬 收到单聊消息: ${userNickname}: ${content}`)
+    
+    // 存储消息供前端轮询
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const message = {
+      id: messageId,
+      type: 'C2C_MESSAGE_CREATE',
+      userOpenid: userOpenid,
+      userNickname: userNickname,
+      content: content,
+      timestamp: timestamp,
+      createdAt: new Date().toISOString(),
+      processed: false
+    }
+    
+    messageStore.set(messageId, message)
+    
+    return new Response(JSON.stringify({ code: 0, message: 'received', data: message }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('单聊消息处理错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 获取新消息（供前端轮询）
+ */
+async function getNewMessages(since = null) {
+  try {
+    const allMessages = Array.from(messageStore.values())
+    
+    // 过滤未处理的消息
+    let newMessages = allMessages.filter(msg => !msg.processed && !processedMessages.has(msg.id))
+    
+    // 如果提供了since参数，只返回该时间之后的消息
+    if (since) {
+      const sinceTime = new Date(since).getTime()
+      newMessages = newMessages.filter(msg => new Date(msg.createdAt).getTime() > sinceTime)
+    }
+    
+    // 按时间倒序排列
+    newMessages.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    
+    return new Response(JSON.stringify({
+      code: 0,
+      data: newMessages,
+      count: newMessages.length
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('获取消息错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 标记消息已处理
+ */
+async function markMessageProcessed(messageId) {
+  try {
+    const message = messageStore.get(messageId)
+    if (!message) {
+      return new Response(JSON.stringify({ code: 404, error: 'Message not found' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+    
+    // 标记为已处理
+    message.processed = true
+    processedMessages.add(messageId)
+    messageStore.set(messageId, message)
+    
+    return new Response(JSON.stringify({
+      code: 0,
+      message: 'marked as processed'
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('标记消息错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}
+
+/**
+ * 代理阿里云API请求（解决CORS问题）
+ */
+async function proxyAliAPI(body, headers) {
+  try {
+    const requestData = typeof body === 'string' ? JSON.parse(body) : body
+    const { apiKey, requestBody } = requestData
+    
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: 'Missing API Key' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+    
+    const API_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
+    
+    console.log('🔄 代理阿里云API请求')
+    
+    const response = await fetch(API_BASE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    })
+    
+    const data = await response.json()
+    
+    console.log(`✅ 阿里云API响应: ${response.status}`)
+    
+    return new Response(JSON.stringify(data), {
+      status: response.status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  } catch (error) {
+    console.error('❌ 代理阿里云API错误:', error)
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+}

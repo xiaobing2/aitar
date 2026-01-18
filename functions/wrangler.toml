@@ -1,0 +1,24 @@
+# Cloudflare Workers 配置文件
+# 用于部署到 Cloudflare Workers 平台
+
+name = "aitag-webhook"
+main = "webhook.js"
+compatibility_date = "2024-01-01"
+
+# 环境变量（需要在 Cloudflare Dashboard 中配置）
+# QQ_SECRET = "your_qq_bot_secret_here"
+
+# 路由配置
+routes = [
+  { pattern = "your-domain.com/api/webhook/qq/group", zone_name = "your-domain.com" },
+  { pattern = "your-domain.com/api/edge/messages", zone_name = "your-domain.com" }
+]
+
+# KV命名空间（可选，用于持久化存储消息）
+# kv_namespaces = [
+#   { binding = "MESSAGES", id = "your-kv-namespace-id" }
+# ]
+
+# 限制
+[limits]
+cpu_ms = 50

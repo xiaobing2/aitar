@@ -1,0 +1,29 @@
+{
+  "functions": {
+    "functions/webhook.js": {
+      "runtime": "nodejs18.x",
+      "memory": 256,
+      "maxDuration": 30
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/webhook/qq/group",
+      "dest": "/functions/webhook.js",
+      "methods": ["GET", "POST", "OPTIONS"]
+    },
+    {
+      "src": "/api/edge/messages",
+      "dest": "/functions/webhook.js",
+      "methods": ["GET", "OPTIONS"]
+    },
+    {
+      "src": "/api/edge/messages/(.*)/processed",
+      "dest": "/functions/webhook.js",
+      "methods": ["POST", "OPTIONS"]
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}

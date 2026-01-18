@@ -1,0 +1,47 @@
+edition: 1.0.0
+name: glass-memo
+access: internet
+
+build:
+  command: npm run build
+  artifacts: dist
+
+functions:
+  # Webhook处理函数 - 接收QQ Webhook回调
+  webhook:
+    handler: webhook.handler
+    memorySize: 256
+    timeout: 30
+    runtime: nodejs18
+    environment:
+      NODE_ENV: production
+      # QQ_SECRET 需要在部署时配置
+      # 本地测试方法：
+      # 1. 在 functions 目录创建 .env 文件，添加: QQ_SECRET=your_secret
+      # 2. 运行: cd functions && node server.js
+      # 3. 或使用测试脚本: node test-local.js
+      # 详细说明请查看: functions/LOCAL_TEST.md
+      # QQ_SECRET: your_qq_bot_secret_here
+    triggers:
+      - type: http
+        path: /api/webhook/qq/group
+        methods:
+          - GET
+          - POST
+          - OPTIONS
+  
+  # 消息查询API - 供前端轮询使用
+  messages:
+    handler: webhook.handler
+    memorySize: 256
+    timeout: 10
+    runtime: nodejs18
+    environment:
+      NODE_ENV: production
+    triggers:
+      - type: http
+        path: /api/edge/messages
+        methods:
+          - GET
+          - OPTIONS
+

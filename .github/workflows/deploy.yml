@@ -1,0 +1,35 @@
+name: Deploy to ESA Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VUE_APP_API_BASE_URL: ${{ secrets.VUE_APP_API_BASE_URL }}
+
+      - name: Deploy to ESA Pages
+        uses: aliyun/esa-pages-action@v1
+        with:
+          access_key_id: ${{ secrets.ESA_ACCESS_KEY_ID }}
+          access_key_secret: ${{ secrets.ESA_ACCESS_KEY_SECRET }}
+          project: glass-memo
+

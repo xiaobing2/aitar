@@ -1,0 +1,21 @@
+{
+  "name": "aitag-edge-functions",
+  "version": "1.0.0",
+  "description": "边缘函数 - QQ Webhook处理器",
+  "type": "module",
+  "main": "webhook.js",
+  "scripts": {
+    "test": "node test-local.js",
+    "server": "node server.js"
+  },
+  "keywords": [
+    "edge-function",
+    "webhook",
+    "qq-bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.3.1"
+  }
+}
