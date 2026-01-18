@@ -5,13 +5,9 @@
 【作品名称】
 Glass Memo - 3D玻璃卡片式AI智能备忘录
 
-【作品访问URL】
-请填写您的ESA Pages部署地址，例如：
-https://your-project.esapages.com
+【作品访问URL】：https://aitar.2b7c6ce6.er.aliyun-esa.net
 
-【GitHub仓库地址】
-请填写您的GitHub公开仓库地址，例如：
-https://github.com/your-username/aitar
+【GitHub仓库地址】：https://github.com/xiaobing2/aitar/
 
 【作品说明】
 

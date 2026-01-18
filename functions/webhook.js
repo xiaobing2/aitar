@@ -49,7 +49,10 @@ async function handleRequest(request) {
     }
     
     // QQ Webhook接收
-    if (method === 'POST' && path === '/api/webhook/qq/group') {
+    // 支持两种路径格式：
+    // 1. /api/webhook/qq/group (直接访问)
+    // 2. /api/edge/webhook/qq/group (ESA Pages自动添加/api/edge前缀)
+    if (method === 'POST' && (path === '/api/webhook/qq/group' || path === '/api/edge/webhook/qq/group')) {
       return await handleQQWebhook(body, headers)
     }
     
