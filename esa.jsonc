@@ -1,0 +1,16 @@
+{
+  // ESA Pages 配置文件
+  "name": "glass-memo",
+  
+  // 边缘函数入口文件（处理QQ Webhook和API代理）
+  // 注意：路径相对于项目根目录
+  "entry": "./functions/webhook.js",
+  
+  // 静态资源目录（Vue构建后的输出目录）
+  "assets": {
+    // 构建后的静态文件目录
+    "directory": "./dist",
+    // SPA应用需要配置404策略，所有路由都返回index.html
+    "notFoundStrategy": "singlePageApplication"
+  }
+}
