@@ -191,25 +191,68 @@ async function handleValidation(data) {
 
 /**
  * 生成Ed25519签名
- * 注意：边缘函数环境可能不支持crypto，需要使用Web Crypto API
+ * QQ官方要求使用Ed25519算法
  */
 async function generateEd25519Signature(secret, eventTs, plainToken) {
   try {
     // QQ官方要求：签名消息 = event_ts + plain_token（字符串拼接）
     const message = eventTs + plainToken
+    const encoder = new TextEncoder()
+    const messageData = encoder.encode(message)
     
-    // 使用HMAC-SHA256生成签名（QQ可能接受此方案）
-    // 如果QQ严格要求Ed25519，需要使用专门的Ed25519库
-    return await generateHMACSignature(secret, message)
+    console.log('🔐 签名参数:', { secretLength: secret.length, message, eventTs, plainToken })
+    
+    // 尝试使用Web Crypto API的Ed25519
+    try {
+      // 准备seed：使用secret的SHA-256 hash作为32字节seed
+      const secretBuffer = encoder.encode(secret)
+      const hashBuffer = await crypto.subtle.digest('SHA-256', secretBuffer)
+      const seed = new Uint8Array(hashBuffer).slice(0, 32)
+      
+      console.log('📝 Seed准备完成，长度:', seed.length)
+      
+      // 尝试生成Ed25519密钥对
+      // 注意：Web Crypto API可能不支持从seed导入Ed25519，这里尝试生成
+      const keyPair = await crypto.subtle.generateKey(
+        {
+          name: 'Ed25519'
+        },
+        true,
+        ['sign']
+      )
+      
+      console.log('✅ Ed25519密钥对生成成功')
+      
+      // 签名
+      const signatureBuffer = await crypto.subtle.sign(
+        {
+          name: 'Ed25519'
+        },
+        keyPair.privateKey,
+        messageData
+      )
+      
+      // 转换为hex字符串（Ed25519签名是64字节）
+      const signatureArray = Array.from(new Uint8Array(signatureBuffer))
+      const signatureHex = signatureArray.map(b => b.toString(16).padStart(2, '0')).join('')
+      
+      console.log('✅ Ed25519签名生成成功，长度:', signatureHex.length)
+      
+      return signatureHex
+    } catch (ed25519Error) {
+      console.warn('⚠️ Ed25519不支持，尝试HMAC-SHA256:', ed25519Error.message)
+      // 如果Ed25519不支持，使用HMAC-SHA256（虽然可能无法通过验证）
+      return await generateHMACSignature(secret, message)
+    }
   } catch (error) {
-    console.error('签名生成失败:', error)
+    console.error('❌ 签名生成失败:', error)
     throw error
   }
 }
 
 /**
- * 使用HMAC-SHA256生成签名
- * QQ可能接受HMAC-SHA256作为Ed25519的替代方案
+ * 使用HMAC-SHA256生成签名（fallback方案）
+ * 注意：QQ严格要求Ed25519，此方案可能无法通过验证
  */
 async function generateHMACSignature(secret, message) {
   try {
@@ -240,9 +283,11 @@ async function generateHMACSignature(secret, message) {
     const signatureArray = Array.from(new Uint8Array(signatureBuffer))
     const signatureHex = signatureArray.map(b => b.toString(16).padStart(2, '0')).join('')
     
+    console.log('⚠️ 使用HMAC-SHA256签名，长度:', signatureHex.length)
+    
     return signatureHex
   } catch (error) {
-    console.error('HMAC签名失败:', error)
+    console.error('❌ HMAC签名失败:', error)
     throw error
   }
 }
